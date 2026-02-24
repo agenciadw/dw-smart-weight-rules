@@ -57,6 +57,13 @@ class DW_SWR_Frontend {
 			return;
 		}
 
+		// No carrinho usamos bloco visual próprio; evitar notice global para não
+		// "vazar" em painéis side (ex.: Minha Conta do Woodmart).
+		if ( is_cart() ) {
+			$this->clear_swr_notices();
+			return;
+		}
+
 		if ( ! $this->is_limit_exceeded() ) {
 			$this->clear_swr_notices();
 			return;
@@ -128,26 +135,10 @@ class DW_SWR_Frontend {
 				button.href = '#';
 			}
 
-			function protectQuoteButtonClick() {
-				var buttons = document.querySelectorAll('.dw-swr-quote-button');
-				if (!buttons.length) {
-					return;
-				}
-				buttons.forEach(function(btn) {
-					btn.addEventListener('click', function(event) {
-						event.preventDefault();
-						event.stopPropagation();
-						window.open(btn.href, '_blank', 'noopener');
-					}, true);
-				});
-			}
-
 			if (document.readyState === 'loading') {
 				document.addEventListener('DOMContentLoaded', disableCheckoutButton);
-				document.addEventListener('DOMContentLoaded', protectQuoteButtonClick);
 			} else {
 				disableCheckoutButton();
-				protectQuoteButtonClick();
 			}
 		})();
 		</script>
@@ -223,6 +214,7 @@ class DW_SWR_Frontend {
 			var cartUrl = <?php echo wp_json_encode( wc_get_cart_url() ); ?>;
 			var isSyncing = false;
 			var isCartUpdating = false;
+			var lastQuoteNavigationTs = 0;
 
 			function debounce(fn, delay) {
 				var timer = null;
@@ -325,19 +317,10 @@ class DW_SWR_Frontend {
 
 				var html = ''
 					+ '<div class="dw-swr-cart-warning">' + (state.notice_html || '') + '</div>'
-					+ '<a href="' + (state.quote_url || '#') + '" target="_blank" rel="noopener noreferrer" class="button dw-swr-quote-button">'
+					+ '<a href="' + (state.quote_url || '#') + '" class="button dw-swr-quote-button">'
 					+ (state.quote_button_text || 'Solicitar orçamento via WhatsApp')
 					+ '</a>';
 				blockArea.innerHTML = html;
-
-				var quoteButton = blockArea.querySelector('.dw-swr-quote-button');
-				if (quoteButton) {
-					quoteButton.addEventListener('click', function(event) {
-						event.preventDefault();
-						event.stopPropagation();
-						window.open(quoteButton.href, '_blank', 'noopener');
-					}, true);
-				}
 			}
 
 			function triggerCartUpdate() {
@@ -363,6 +346,29 @@ class DW_SWR_Frontend {
 					isCartUpdating = false;
 					debouncedSync();
 				}, 700);
+			}
+
+			function handleQuoteNavigation(event) {
+				var quoteButton = event.target && event.target.closest ? event.target.closest('.dw-swr-quote-button') : null;
+				if (!quoteButton) {
+					return;
+				}
+
+				event.preventDefault();
+				event.stopPropagation();
+
+				var now = Date.now();
+				if ((now - lastQuoteNavigationTs) < 500) {
+					return;
+				}
+				lastQuoteNavigationTs = now;
+
+				var url = quoteButton.getAttribute('href');
+				if (!url) {
+					return;
+				}
+
+				window.location.assign(url);
 			}
 
 			function syncState() {
@@ -404,18 +410,14 @@ class DW_SWR_Frontend {
 				}
 			}, true);
 
+			document.addEventListener('click', handleQuoteNavigation, true);
+			document.addEventListener('touchend', handleQuoteNavigation, true);
+
 			if (typeof jQuery !== 'undefined') {
 				jQuery(document.body).on('updated_wc_div updated_cart_totals wc_fragments_refreshed wc_fragments_loaded removed_from_cart added_to_cart', function() {
 					isCartUpdating = false;
 					debouncedSync();
 				});
-			}
-
-			if (typeof MutationObserver !== 'undefined') {
-				var observer = new MutationObserver(function() {
-					debouncedSync();
-				});
-				observer.observe(document.body, { childList: true, subtree: true });
 			}
 
 			syncState();
@@ -479,7 +481,7 @@ class DW_SWR_Frontend {
 
 		$url = $this->get_quote_request_url();
 
-		echo '<a href="' . esc_url( $url ) . '" target="_blank" rel="noopener noreferrer" class="button dw-swr-quote-button">';
+		echo '<a href="' . esc_url( $url ) . '" class="button dw-swr-quote-button">';
 		echo esc_html( $button_text );
 		echo '</a>';
 	}
@@ -880,7 +882,7 @@ class DW_SWR_Frontend {
 		);
 
 		return sprintf(
-			'<a href="%1$s" target="_blank" rel="noopener noreferrer" class="button dw-swr-whatsapp-button">%2$s</a>',
+			'<a href="%1$s" class="button dw-swr-whatsapp-button">%2$s</a>',
 			esc_url( $url ),
 			esc_html__( 'Falar no WhatsApp', 'dw-smart-weight-rules' )
 		);
