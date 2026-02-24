@@ -1,0 +1,41 @@
+.dw-swr-cart-warning {
+	margin-top: 10px;
+	color: #b81c23;
+	font-size: 13px;
+}
+
+.dw-swr-whatsapp-button.button {
+	margin-top: 8px;
+	background: #25d366;
+	border-color: #25d366;
+	color: #fff;
+	border-radius: var(--btn-accented-brd-radius, 6px) !important;
+}
+
+.dw-swr-disabled-checkout {
+	pointer-events: none;
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+a.checkout.wc-forward.dw-swr-disabled-checkout-link {
+	pointer-events: auto;
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.dw-swr-quote-button.button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 100%;
+	margin-top: 10px;
+	padding: 14px 16px;
+	background-color: #25d366;
+	border-color: #25d366;
+	color: #fff;
+	text-decoration: none;
+	border-radius: var(--btn-accented-brd-radius, 6px) !important;
+	position: relative;
+	z-index: 2;
+}
