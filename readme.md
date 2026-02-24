@@ -1,8 +1,6 @@
 # DW Smart Weight Rules v0.0.1
 
 ![Plugin Version](https://img.shields.io/badge/version-0.0.1-blue.svg)
-![WooCommerce Compatible](https://img.shields.io/badge/WooCommerce-9.x-96588a.svg)
-![WordPress Compatible](https://img.shields.io/badge/WordPress-6.x-21759b.svg)
 ![WordPress](https://img.shields.io/badge/WordPress-5.8+-green.svg)
 ![WooCommerce](https://img.shields.io/badge/WooCommerce-6.0+-orange.svg)
 ![PHP](https://img.shields.io/badge/PHP-7.4+-purple.svg)
