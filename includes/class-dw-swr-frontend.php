@@ -86,11 +86,219 @@ class DW_SWR_Frontend {
 			return $rates;
 		}
 
-		if ( $this->is_limit_exceeded() ) {
+		if ( ! $this->is_weight_threshold_reached() ) {
+			return $rates;
+		}
+
+		$hidden_methods = $this->get_hidden_shipping_methods();
+
+		// Retrocompatibilidade: vazio = oculta todos os métodos.
+		if ( empty( $hidden_methods ) ) {
 			return array();
 		}
 
+		// Regras específicas de ocultação só se aplicam na zona atual correspondente.
+		// Se não houver match de zona atual, cai para bloqueio total (WhatsApp).
+		if ( ! $this->is_hide_mode_active_for_current_zone() ) {
+			return array();
+		}
+
+		foreach ( $rates as $rate_key => $rate ) {
+			if ( ! is_object( $rate ) ) {
+				continue;
+			}
+
+			if ( $this->should_hide_rate( $rate, (string) $rate_key, $hidden_methods ) ) {
+				unset( $rates[ $rate_key ] );
+			}
+		}
+
 		return $rates;
+	}
+
+	/**
+	 * Retorna métodos de entrega configurados para ocultar.
+	 *
+	 * Pode conter método base (ex.: free_shipping) e/ou instância (ex.: flat_rate:12).
+	 *
+	 * @return array<string>
+	 */
+	private function get_hidden_shipping_methods() {
+		$settings = DW_SWR_Settings::get_settings();
+		if ( empty( $settings['hidden_shipping_methods'] ) || ! is_array( $settings['hidden_shipping_methods'] ) ) {
+			return array();
+		}
+
+		$methods = array_map( 'strval', $settings['hidden_shipping_methods'] );
+		return array_values( array_unique( array_filter( $methods ) ) );
+	}
+
+	/**
+	 * Indica se está no modo "ocultar métodos específicos".
+	 *
+	 * Quando ativo, não bloqueia checkout e não exibe CTA de WhatsApp.
+	 *
+	 * @return bool
+	 */
+	private function is_hide_selected_methods_mode() {
+		return ! empty( $this->get_hidden_shipping_methods() );
+	}
+
+	/**
+	 * Verifica se o limite de peso foi atingido para aplicar filtro de frete.
+	 *
+	 * Neste contexto, se houver métodos específicos selecionados para ocultar,
+	 * a regra de peso é aplicada independentemente da seleção de áreas.
+	 *
+	 * @return bool
+	 */
+	private function is_weight_threshold_reached() {
+		$settings       = DW_SWR_Settings::get_settings();
+		$current_weight = $this->get_cart_weight_with_selection_compatibility();
+		$max_weight     = isset( $settings['max_weight'] ) ? (float) $settings['max_weight'] : 0.0;
+
+		if ( $max_weight <= 0 || ( $current_weight - $max_weight ) <= 0.00001 ) {
+			return false;
+		}
+
+		// Se houver métodos específicos para ocultar, a regra por peso fica ativa
+		// independentemente da seleção de áreas; a decisão entre "ocultar" ou
+		// "bloquear total" é feita por zona atual.
+		if ( $this->is_hide_selected_methods_mode() ) {
+			return true;
+		}
+
+		return $this->is_zone_rule_applicable();
+	}
+
+	/**
+	 * Verifica se uma taxa de frete deve ser ocultada.
+	 *
+	 * Faz match por:
+	 * - id completo da taxa (ex.: flat_rate:12)
+	 * - id do método (ex.: flat_rate)
+	 * - combinação método+instância selecionada no admin
+	 * - instância isolada (fallback)
+	 *
+	 * @param object        $rate           Taxa do WooCommerce.
+	 * @param string        $rate_key       Chave da taxa.
+	 * @param array<string> $hidden_methods Métodos configurados para ocultar.
+	 * @return bool
+	 */
+	private function should_hide_rate( $rate, $rate_key, $hidden_methods ) {
+		$rate_id     = method_exists( $rate, 'get_id' ) ? (string) $rate->get_id() : $rate_key;
+		$method_id   = method_exists( $rate, 'get_method_id' ) ? (string) $rate->get_method_id() : '';
+		$instance_id = method_exists( $rate, 'get_instance_id' ) ? (int) $rate->get_instance_id() : 0;
+
+		foreach ( $hidden_methods as $hidden ) {
+			$hidden = (string) $hidden;
+			if ( '' === $hidden ) {
+				continue;
+			}
+
+			// Match direto por id completo da taxa.
+			if ( $hidden === $rate_id ) {
+				return true;
+			}
+
+			// Match por método base (oculta todas instâncias do método).
+			if ( $hidden === $method_id ) {
+				return true;
+			}
+
+			// Match por "method:instance" ou fallback por instance.
+			if ( false !== strpos( $hidden, ':' ) ) {
+				list( $hidden_method, $hidden_instance ) = array_pad( explode( ':', $hidden, 2 ), 2, '' );
+				$hidden_method   = (string) $hidden_method;
+				$hidden_instance = (int) $hidden_instance;
+
+				// Match ideal: método + instância.
+				if ( '' !== $hidden_method && $hidden_method === $method_id && $hidden_instance > 0 && $hidden_instance === $instance_id ) {
+					return true;
+				}
+
+				// Fallback: instância id igual, mesmo se método variar por integração.
+				if ( $hidden_instance > 0 && $hidden_instance === $instance_id ) {
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Verifica se o modo de ocultação de métodos está ativo para a zona atual.
+	 *
+	 * - Método base (ex.: frenet) aplica se existir na zona atual.
+	 * - Método com instância (ex.: frenet:3) aplica apenas se essa instância
+	 *   pertencer à zona atual.
+	 *
+	 * @return bool
+	 */
+	private function is_hide_mode_active_for_current_zone() {
+		$hidden_methods = $this->get_hidden_shipping_methods();
+		if ( empty( $hidden_methods ) ) {
+			return false;
+		}
+
+		$current_zone_id = $this->get_current_cart_zone_id();
+		if ( null === $current_zone_id ) {
+			return false;
+		}
+
+		if ( ! class_exists( 'WC_Shipping_Zone' ) ) {
+			return false;
+		}
+
+		$zone = new WC_Shipping_Zone( (int) $current_zone_id );
+		if ( ! method_exists( $zone, 'get_shipping_methods' ) ) {
+			return false;
+		}
+
+		$zone_methods = $zone->get_shipping_methods( true );
+		if ( empty( $zone_methods ) || ! is_array( $zone_methods ) ) {
+			return false;
+		}
+
+		foreach ( $hidden_methods as $hidden ) {
+			$hidden = (string) $hidden;
+			if ( '' === $hidden ) {
+				continue;
+			}
+
+			foreach ( $zone_methods as $zone_method ) {
+				if ( ! is_object( $zone_method ) ) {
+					continue;
+				}
+
+				$zone_method_id   = isset( $zone_method->id ) ? (string) $zone_method->id : '';
+				$zone_instance_id = isset( $zone_method->instance_id ) ? (int) $zone_method->instance_id : 0;
+				if ( '' === $zone_method_id ) {
+					continue;
+				}
+
+				// Match por método base.
+				if ( false === strpos( $hidden, ':' ) && $hidden === $zone_method_id ) {
+					return true;
+				}
+
+				// Match por método:instância.
+				if ( false !== strpos( $hidden, ':' ) ) {
+					list( $hidden_method, $hidden_instance ) = array_pad( explode( ':', $hidden, 2 ), 2, '' );
+					$hidden_method   = (string) $hidden_method;
+					$hidden_instance = (int) $hidden_instance;
+
+					if ( $hidden_instance > 0 && $hidden_instance === $zone_instance_id ) {
+						if ( '' === $hidden_method || $hidden_method === $zone_method_id ) {
+							return true;
+						}
+					}
+				}
+			}
+		}
+
+		return false;
 	}
 
 	/**
@@ -169,6 +377,11 @@ class DW_SWR_Frontend {
 					button.classList.add('dw-swr-disabled-checkout-link');
 					button.setAttribute('aria-disabled', 'true');
 					button.href = <?php echo wp_json_encode( $cart_url ); ?>;
+
+					if (button.dataset.dwSwrMiniBound === '1') {
+						return;
+					}
+					button.dataset.dwSwrMiniBound = '1';
 
 					button.addEventListener('click', function(event) {
 						event.preventDefault();
@@ -266,6 +479,10 @@ class DW_SWR_Frontend {
 				var miniButtons = document.querySelectorAll('a.checkout.wc-forward');
 				miniButtons.forEach(function(button) {
 					button.classList.add('dw-swr-disabled-checkout-link');
+					if (button.dataset.dwSwrMiniBoundSync === '1') {
+						return;
+					}
+					button.dataset.dwSwrMiniBoundSync = '1';
 					button.addEventListener('click', function(event) {
 						if (!button.classList.contains('dw-swr-disabled-checkout-link')) return;
 						event.preventDefault();
@@ -540,11 +757,13 @@ class DW_SWR_Frontend {
 	 * @return bool
 	 */
 	private function is_limit_exceeded() {
-		$settings      = DW_SWR_Settings::get_settings();
-		$current_weight = $this->get_cart_weight_with_selection_compatibility();
-		$max_weight    = isset( $settings['max_weight'] ) ? (float) $settings['max_weight'] : 0.0;
+		// Se há métodos específicos para ocultar E eles batem com a zona atual,
+		// apenas filtra frete e não bloqueia checkout.
+		if ( $this->is_hide_selected_methods_mode() && $this->is_hide_mode_active_for_current_zone() ) {
+			return false;
+		}
 
-		return $max_weight > 0 && ( $current_weight - $max_weight ) > 0.00001;
+		return $this->is_weight_threshold_reached();
 	}
 
 	/**
@@ -623,6 +842,79 @@ class DW_SWR_Frontend {
 
 		$category_ids = array_map( 'absint', $settings['product_categories'] );
 		return array_values( array_unique( array_filter( $category_ids ) ) );
+	}
+
+	/**
+	 * Obtém IDs de zonas de entrega configuradas para a regra.
+	 *
+	 * @return array<int>
+	 */
+	private function get_rule_zone_ids() {
+		$settings = DW_SWR_Settings::get_settings();
+		if ( empty( $settings['delivery_zones'] ) || ! is_array( $settings['delivery_zones'] ) ) {
+			return array();
+		}
+
+		$zone_ids = array_map( 'intval', $settings['delivery_zones'] );
+		return array_values(
+			array_unique(
+				array_filter(
+					$zone_ids,
+					function( $zone_id ) {
+						return is_numeric( $zone_id ) && (int) $zone_id >= 0;
+					}
+				)
+			)
+		);
+	}
+
+	/**
+	 * Verifica se a regra deve ser aplicada na zona de entrega atual.
+	 *
+	 * Quando nenhuma zona está configurada, vale para toda a loja.
+	 *
+	 * @return bool
+	 */
+	private function is_zone_rule_applicable() {
+		$rule_zone_ids = $this->get_rule_zone_ids();
+		if ( empty( $rule_zone_ids ) ) {
+			return true;
+		}
+
+		$current_zone_id = $this->get_current_cart_zone_id();
+		if ( null === $current_zone_id ) {
+			return false;
+		}
+
+		return in_array( (int) $current_zone_id, $rule_zone_ids, true );
+	}
+
+	/**
+	 * Obtém ID da zona de entrega atual do carrinho.
+	 *
+	 * @return int|null
+	 */
+	private function get_current_cart_zone_id() {
+		if ( ! function_exists( 'WC' ) || ! WC()->cart || ! class_exists( 'WC_Shipping_Zones' ) ) {
+			return null;
+		}
+
+		$packages = WC()->cart->get_shipping_packages();
+		if ( empty( $packages ) || ! is_array( $packages ) ) {
+			return null;
+		}
+
+		$package = reset( $packages );
+		if ( ! is_array( $package ) ) {
+			return null;
+		}
+
+		$zone = WC_Shipping_Zones::get_zone_matching_package( $package );
+		if ( ! $zone || ! is_object( $zone ) || ! method_exists( $zone, 'get_id' ) ) {
+			return null;
+		}
+
+		return (int) $zone->get_id();
 	}
 
 	/**

@@ -30,6 +30,8 @@ class DW_SWR_Settings {
 		return array(
 			'max_weight'             => 30,
 			'product_categories'     => array(),
+			'delivery_zones'         => array(),
+			'hidden_shipping_methods'=> array(),
 			'cart_message'           => '<strong>Peso atual:</strong> {current_weight} {unit}<br>Pedidos acima de {max_weight} {unit} precisam de atendimento manual.',
 			'whatsapp_number'        => '5511999999999',
 			'whatsapp_text'          => "Olá! Meu carrinho está com {current_weight} {unit}, acima do limite de {max_weight} {unit}.\n\nItens para cotação:\n{cart_items}\n\nSubtotal dos itens: {subtotal}",
@@ -58,6 +60,7 @@ class DW_SWR_Settings {
 	public function __construct() {
 		add_action( 'admin_menu', array( $this, 'register_menu' ) );
 		add_action( 'admin_init', array( $this, 'register_settings' ) );
+		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_assets' ) );
 	}
 
 	/**
@@ -132,6 +135,22 @@ class DW_SWR_Settings {
 		);
 
 		add_settings_field(
+			'delivery_zones',
+			__( 'Áreas de entrega para aplicar regra de peso', 'dw-smart-weight-rules' ),
+			array( $this, 'render_delivery_zones_field' ),
+			self::PAGE_SLUG,
+			'dw_swr_main_section'
+		);
+
+		add_settings_field(
+			'hidden_shipping_methods',
+			__( 'Métodos de entrega para ocultar ao exceder peso', 'dw-smart-weight-rules' ),
+			array( $this, 'render_hidden_shipping_methods_field' ),
+			self::PAGE_SLUG,
+			'dw_swr_main_section'
+		);
+
+		add_settings_field(
 			'cart_message',
 			__( 'Mensagem no carrinho/checkout', 'dw-smart-weight-rules' ),
 			array( $this, 'render_cart_message_field' ),
@@ -193,8 +212,20 @@ class DW_SWR_Settings {
 		$product_categories = isset( $input['product_categories'] ) && is_array( $input['product_categories'] )
 			? array_map( 'absint', $input['product_categories'] )
 			: array();
-		$product_categories = array_values( array_unique( array_filter( $product_categories ) ) );
+		$product_categories = array_values( array_unique( array_filter( $product_categories, array( $this, 'is_positive_int' ) ) ) );
 		$output['product_categories'] = $product_categories;
+
+		$delivery_zones = isset( $input['delivery_zones'] ) && is_array( $input['delivery_zones'] )
+			? array_map( 'intval', $input['delivery_zones'] )
+			: array();
+		$delivery_zones = array_values( array_unique( array_filter( $delivery_zones, array( $this, 'is_valid_zone_id' ) ) ) );
+		$output['delivery_zones'] = $delivery_zones;
+
+		$hidden_shipping_methods = isset( $input['hidden_shipping_methods'] ) && is_array( $input['hidden_shipping_methods'] )
+			? array_map( 'sanitize_text_field', $input['hidden_shipping_methods'] )
+			: array();
+		$hidden_shipping_methods = array_values( array_unique( array_filter( $hidden_shipping_methods ) ) );
+		$output['hidden_shipping_methods'] = $hidden_shipping_methods;
 
 		$allowed_html = array(
 			'strong' => array(),
@@ -260,7 +291,14 @@ class DW_SWR_Settings {
 			)
 		);
 		?>
-		<select name="<?php echo esc_attr( self::OPTION_KEY ); ?>[product_categories][]" multiple size="8" style="min-width: 320px;">
+		<select
+			id="dw_swr_product_categories"
+			name="<?php echo esc_attr( self::OPTION_KEY ); ?>[product_categories][]"
+			class="dw-swr-enhanced-select"
+			multiple="multiple"
+			style="width: 100%; max-width: 560px;"
+			data-placeholder="<?php echo esc_attr__( 'Selecione as categorias...', 'dw-smart-weight-rules' ); ?>"
+		>
 			<?php
 			if ( ! is_wp_error( $terms ) ) {
 				foreach ( $terms as $term ) {
@@ -278,6 +316,245 @@ class DW_SWR_Settings {
 			<?php echo esc_html__( 'Quando vazio, a regra de peso considera todos os produtos.', 'dw-smart-weight-rules' ); ?>
 		</p>
 		<?php
+	}
+
+	/**
+	 * Campo de áreas de entrega (zonas de frete).
+	 *
+	 * @return void
+	 */
+	public function render_delivery_zones_field() {
+		$settings = self::get_settings();
+		$selected = isset( $settings['delivery_zones'] ) && is_array( $settings['delivery_zones'] )
+			? array_map( 'intval', $settings['delivery_zones'] )
+			: array();
+
+		?>
+		<select
+			id="dw_swr_delivery_zones"
+			name="<?php echo esc_attr( self::OPTION_KEY ); ?>[delivery_zones][]"
+			class="dw-swr-enhanced-select"
+			multiple="multiple"
+			style="width: 100%; max-width: 560px;"
+			data-placeholder="<?php echo esc_attr__( 'Selecione as áreas de entrega...', 'dw-smart-weight-rules' ); ?>"
+		>
+			<option value="0" <?php selected( in_array( 0, $selected, true ) ); ?>>
+				<?php echo esc_html__( 'Locais não cobertos por outras zonas', 'dw-smart-weight-rules' ); ?>
+			</option>
+			<?php
+			if ( class_exists( 'WC_Shipping_Zones' ) ) {
+				$zones = WC_Shipping_Zones::get_zones();
+				if ( is_array( $zones ) ) {
+					foreach ( $zones as $zone ) {
+						$zone_id   = isset( $zone['id'] ) ? (int) $zone['id'] : 0;
+						$zone_name = isset( $zone['zone_name'] ) ? (string) $zone['zone_name'] : '';
+						if ( $zone_id <= 0 || '' === $zone_name ) {
+							continue;
+						}
+						?>
+						<option value="<?php echo esc_attr( (string) $zone_id ); ?>" <?php selected( in_array( $zone_id, $selected, true ) ); ?>>
+							<?php echo esc_html( $zone_name ); ?>
+						</option>
+						<?php
+					}
+				}
+			}
+			?>
+		</select>
+		<?php
+		?>
+		<p class="description">
+			<?php echo esc_html__( 'Quando vazio, a regra vale para toda a loja.', 'dw-smart-weight-rules' ); ?>
+		</p>
+		<?php
+	}
+
+	/**
+	 * Campo de métodos de entrega a ocultar quando exceder peso.
+	 *
+	 * @return void
+	 */
+	public function render_hidden_shipping_methods_field() {
+		$settings = self::get_settings();
+		$selected = isset( $settings['hidden_shipping_methods'] ) && is_array( $settings['hidden_shipping_methods'] )
+			? array_map( 'strval', $settings['hidden_shipping_methods'] )
+			: array();
+		$options = $this->get_shipping_method_options();
+		?>
+		<select
+			id="dw_swr_hidden_shipping_methods"
+			name="<?php echo esc_attr( self::OPTION_KEY ); ?>[hidden_shipping_methods][]"
+			class="dw-swr-enhanced-select"
+			multiple="multiple"
+			style="width: 100%; max-width: 560px;"
+			data-placeholder="<?php echo esc_attr__( 'Selecione os métodos para ocultar...', 'dw-smart-weight-rules' ); ?>"
+		>
+			<?php foreach ( $options as $value => $label ) : ?>
+				<option value="<?php echo esc_attr( (string) $value ); ?>" <?php selected( in_array( (string) $value, $selected, true ) ); ?>>
+					<?php echo esc_html( $label ); ?>
+				</option>
+			<?php endforeach; ?>
+		</select>
+		<p class="description">
+			<?php echo esc_html__( 'Selecione os métodos a ocultar quando o peso ultrapassar o limite. Se deixar vazio, todos os métodos serão ocultados (comportamento atual).', 'dw-smart-weight-rules' ); ?>
+		</p>
+		<?php
+	}
+
+	/**
+	 * Retorna lista de métodos de entrega para seleção no admin.
+	 *
+	 * Inclui método base (ex.: free_shipping) e instâncias por zona
+	 * (ex.: free_shipping:12), para permitir controle fino.
+	 *
+	 * @return array<string,string>
+	 */
+	private function get_shipping_method_options() {
+		$options = array();
+
+		// Métodos base registrados.
+		if ( function_exists( 'WC' ) && WC() && method_exists( WC(), 'shipping' ) ) {
+			$shipping = WC()->shipping();
+			if ( $shipping && method_exists( $shipping, 'load_shipping_methods' ) ) {
+				$methods = $shipping->load_shipping_methods();
+				if ( is_array( $methods ) ) {
+					foreach ( $methods as $method ) {
+						if ( ! is_object( $method ) || ! method_exists( $method, 'get_method_title' ) ) {
+							continue;
+						}
+						$method_id = isset( $method->id ) ? (string) $method->id : '';
+						if ( '' === $method_id ) {
+							continue;
+						}
+						$label = $method->get_method_title() ? $method->get_method_title() : $method_id;
+						$options[ $method_id ] = sprintf( '[Global] %s (%s)', $label, $method_id );
+					}
+				}
+			}
+		}
+
+		// Instâncias por zona.
+		if ( class_exists( 'WC_Shipping_Zones' ) ) {
+			$zones = WC_Shipping_Zones::get_zones();
+			if ( is_array( $zones ) ) {
+				foreach ( $zones as $zone_data ) {
+					$zone_id   = isset( $zone_data['id'] ) ? (int) $zone_data['id'] : 0;
+					$zone_name = isset( $zone_data['zone_name'] ) ? (string) $zone_data['zone_name'] : '';
+					if ( $zone_id <= 0 || '' === $zone_name ) {
+						continue;
+					}
+
+					$zone = new WC_Shipping_Zone( $zone_id );
+					if ( ! method_exists( $zone, 'get_shipping_methods' ) ) {
+						continue;
+					}
+
+					$zone_methods = $zone->get_shipping_methods( true );
+					if ( ! is_array( $zone_methods ) ) {
+						continue;
+					}
+
+					foreach ( $zone_methods as $zone_method ) {
+						if ( ! is_object( $zone_method ) ) {
+							continue;
+						}
+						$method_id   = isset( $zone_method->id ) ? (string) $zone_method->id : '';
+						$instance_id = isset( $zone_method->instance_id ) ? (int) $zone_method->instance_id : 0;
+						if ( '' === $method_id || $instance_id <= 0 ) {
+							continue;
+						}
+
+						$value = $method_id . ':' . $instance_id;
+						$title = method_exists( $zone_method, 'get_title' ) ? $zone_method->get_title() : $method_id;
+						$options[ $value ] = sprintf( '[%s] %s (%s)', $zone_name, $title, $value );
+					}
+				}
+			}
+
+			// Zona "locais não cobertos".
+			$zone = new WC_Shipping_Zone( 0 );
+			if ( method_exists( $zone, 'get_shipping_methods' ) ) {
+				$zone_methods = $zone->get_shipping_methods( true );
+				if ( is_array( $zone_methods ) ) {
+					foreach ( $zone_methods as $zone_method ) {
+						if ( ! is_object( $zone_method ) ) {
+							continue;
+						}
+						$method_id   = isset( $zone_method->id ) ? (string) $zone_method->id : '';
+						$instance_id = isset( $zone_method->instance_id ) ? (int) $zone_method->instance_id : 0;
+						if ( '' === $method_id || $instance_id <= 0 ) {
+							continue;
+						}
+
+						$value = $method_id . ':' . $instance_id;
+						$title = method_exists( $zone_method, 'get_title' ) ? $zone_method->get_title() : $method_id;
+						$options[ $value ] = sprintf( '[Não cobertos] %s (%s)', $title, $value );
+					}
+				}
+			}
+		}
+
+		asort( $options );
+		return $options;
+	}
+
+	/**
+	 * Assets do admin (somente na página do plugin).
+	 *
+	 * @param string $hook_suffix Sufixo do hook admin.
+	 * @return void
+	 */
+	public function enqueue_admin_assets( $hook_suffix ) {
+		if ( 'woocommerce_page_' . self::PAGE_SLUG !== $hook_suffix ) {
+			return;
+		}
+
+		wp_enqueue_script( 'select2' );
+		if ( function_exists( 'WC' ) && WC() ) {
+			wp_enqueue_style( 'select2', WC()->plugin_url() . '/assets/css/select2.css', array(), WC()->version );
+		}
+
+		$handle = 'dw-swr-admin-select2';
+		wp_register_script( $handle, '', array( 'jquery', 'select2' ), DW_SWR_VERSION, true );
+		wp_enqueue_script( $handle );
+		wp_add_inline_script(
+			$handle,
+			"jQuery(function($){
+				if (typeof $.fn.select2 === 'undefined') return;
+				$('.dw-swr-enhanced-select').each(function(){
+					var \$el = $(this);
+					if (\$el.hasClass('select2-hidden-accessible')) {
+						try { \$el.select2('destroy'); } catch(e) {}
+					}
+					\$el.select2({
+						width: '100%',
+						placeholder: \$el.data('placeholder') || 'Selecione...',
+						allowClear: true,
+						dropdownParent: \$el.closest('td')
+					});
+				});
+			});"
+		);
+	}
+
+	/**
+	 * Valida inteiro positivo.
+	 *
+	 * @param mixed $value Valor.
+	 * @return bool
+	 */
+	public function is_positive_int( $value ) {
+		return is_numeric( $value ) && (int) $value > 0;
+	}
+
+	/**
+	 * Valida ID de zona de frete (permite 0).
+	 *
+	 * @param mixed $value Valor.
+	 * @return bool
+	 */
+	public function is_valid_zone_id( $value ) {
+		return is_numeric( $value ) && (int) $value >= 0;
 	}
 
 	/**

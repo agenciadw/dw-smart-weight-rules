@@ -14,6 +14,9 @@ Plugin para WooCommerce que bloqueia a finalizacao de compra quando o peso do ca
 - **Bloqueio hard**: impede finalizar compra acima do limite
 - **Frete oculto**: remove metodos de envio quando o limite e excedido
 - **Atualizacao em tempo real**: sincroniza estado de bloqueio por AJAX ao alterar quantidade
+- **Filtro por categorias**: aplica a regra de peso apenas para categorias selecionadas
+- **Filtro por areas de entrega**: aplica a regra por zonas de frete selecionadas
+- **Ocultar metodos especificos**: opcionalmente, oculta apenas determinados metodos de entrega (ex.: Frenet/Jadlog) quando o peso passa do limite, mantendo checkout liberado com os demais
 
 ### 💬 Orcamento via WhatsApp
 - **Botao de orcamento**: aparece abaixo do checkout quando excede o limite
@@ -30,6 +33,9 @@ Plugin para WooCommerce que bloqueia a finalizacao de compra quando o peso do ca
 - **WooCommerce > DW Peso Maximo**
 - **Campos de configuracao**:
   - Peso maximo
+  - Categorias para aplicar regra de peso (com busca e selecao multipla)
+  - Areas de entrega para aplicar regra de peso (com busca e selecao multipla)
+  - Metodos de entrega para ocultar ao exceder peso (com busca e selecao multipla)
   - Mensagem no carrinho/checkout
   - Numero WhatsApp
   - Mensagem WhatsApp
@@ -68,14 +74,24 @@ Plugin para WooCommerce que bloqueia a finalizacao de compra quando o peso do ca
   - `{current_weight}`, `{max_weight}`, `{unit}`, `{cart_items}`, `{subtotal}`
 
 ### Comportamento de bloqueio
-- Acima do limite:
+- Acima do limite (sem metodos especificos selecionados para ocultar):
   - checkout bloqueado
-  - frete oculto
+  - frete oculto (todas as opcoes)
   - botao de orcamento habilitado
+- Acima do limite (com metodos especificos selecionados para ocultar e zona correspondente):
+  - apenas os metodos marcados sao ocultados
+  - checkout continua liberado com os demais metodos
+  - sem botao de orcamento (fluxo normal de compra)
 - Abaixo do limite:
   - checkout liberado
   - frete normal
   - aviso removido automaticamente
+
+### Escopo da regra (categorias e areas)
+- **Categorias vazias**: considera todos os produtos
+- **Categorias selecionadas**: considera apenas produtos dessas categorias no calculo do peso
+- **Areas de entrega vazias**: regra valida para toda loja
+- **Areas de entrega selecionadas**: regra valida apenas nas zonas de frete escolhidas
 
 ## 🔌 Compatibilidade
 
@@ -130,6 +146,9 @@ dw-smart-weight-rules/
 - ✅ Bloqueio de checkout no mini cart (Woodmart)
 - ✅ Sincronizacao AJAX em alteracoes de quantidade
 - ✅ Filtro por categorias: aplicar regra apenas a produtos das categorias selecionadas
+- ✅ Busca em categorias com selecao multipla no estilo Select2
+- ✅ Filtro por areas de entrega (zonas de frete) com selecao multipla e busca
+- ✅ Ocultar apenas metodos de entrega selecionados por zona quando exceder o peso (modo filtro de frete)
 
 ## 🐛 Suporte e Bugs
 
